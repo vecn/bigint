@@ -342,12 +342,15 @@ int bigint_compare_u32(const bigint_t *big, uint32_t n)
 	if (big->len > 1)
 		return 1;
 
-	if (big->bits[0] > n)
-		return 1;
-	else if (big->bits[0] < n)
-		return -1;
-	else
-		return 0;
+	if (big->len == 1) {
+		if (big->bits[0] > n)
+			return 1;
+		else if (big->bits[0] < n)
+			return -1;
+		else
+			return 0;
+	}
+	return 0;
 }
     
 int bigint_compare_u64(const bigint_t *big, uint64_t n)
@@ -355,19 +358,29 @@ int bigint_compare_u64(const bigint_t *big, uint64_t n)
 	if (big->len > 2)
 		return 1;
 
-	uint32_t aux = (n >> BITSXWORD);
-	if (big->bits[1] > aux) {
-		return 1;
-	} else if (big->bits[1] < aux) {
-		return -1;
-	} else {
-		aux = n & NMAX;
-		if (big->bits[0] > aux)
+	if (big->len == 2) {
+		uint32_t aux = (n >> BITSXWORD);
+		if (big->bits[1] > aux) {
 			return 1;
-		else if (big->bits[0] < aux)
+		} else if (big->bits[1] < aux) {
+			return -1;
+		} else {
+			aux = n & NMAX;
+			if (big->bits[0] > aux)
+				return 1;
+			else if (big->bits[0] < aux)
+				return -1;
+			else
+				return 0;
+		}
+	}
+	if (big->len < 2) {
+		uint32_t aux = (n >> BITSXWORD);
+		if (aux > 0)
 			return -1;
 		else
-			return 0;
+			return bigint_compare_u32(big, n & NMAX);
+
 	}
 }
 
@@ -492,7 +505,11 @@ uint32_t bigint_get_2k_geq(const bigint_t *big)
 
 uint32_t bigint_truncate_u32(const bigint_t *big)
 {
-	return big->bits[0];
+	if (big->len > 0) {
+		return big->bits[0];
+	} else {
+		return 0;
+	}
 }
 
 uint64_t bigint_truncate_u64(const bigint_t *big)
@@ -1165,7 +1182,9 @@ void bigint_mod_2kless1(bigint_t *big, uint32_t k)
 	}
 
 	if (bigint_compare_2kless1(big, k) >= 0) {
+		bigint_add_u32(big, 1);
 		bigint_subtract_2k(big, k);
+		bigint_subtract_u32(big, 1);
 	}
 }
 
