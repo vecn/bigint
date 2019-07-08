@@ -477,7 +477,7 @@ static uint32_t index_of_msbit_in_word(uint32_t word)
 			byte ++;
 		}
 		int bit = (byte - 1) << 3;
-		while (word >> bit) {
+		while ((uint64_t)word >> bit) {
 			bit ++;
 		}
 		return bit - 1;
@@ -1032,6 +1032,7 @@ void bigint_div_2kless1(bigint_t *big, uint32_t k, bigint_t *res)
 
 	if (bigint_compare_2kless1(res, k) >= 0) {
 		bigint_add_u32(big, 1);
+		bigint_add_u32(res, 1);
 		bigint_subtract_2k(res, k);
 	}
 }
@@ -1176,7 +1177,7 @@ void bigint_mod_2k(bigint_t *big, uint32_t k)
 }
 
 void bigint_mod_2kless1(bigint_t *big, uint32_t k)
-{	
+{
 	while (bigint_compare_2k(big, k) >= 0) {
 		set_div2k_plus_res2k(big, k);
 	}
@@ -1184,7 +1185,6 @@ void bigint_mod_2kless1(bigint_t *big, uint32_t k)
 	if (bigint_compare_2kless1(big, k) >= 0) {
 		bigint_add_u32(big, 1);
 		bigint_subtract_2k(big, k);
-		bigint_subtract_u32(big, 1);
 	}
 }
 
