@@ -8,6 +8,7 @@ typedef struct bigint_s bigint_t;
 bigint_t *bigint_create(uint32_t words);
 bigint_t *bigint_clone(const bigint_t *src);
 void bigint_destroy(bigint_t *big);
+
 void bigint_set_u32(bigint_t *big, uint32_t a);
 void bigint_set_u64(bigint_t *big, uint64_t a);
 void bigint_set_hexadec(bigint_t *big, const char *hexadec);
@@ -26,6 +27,7 @@ void bigint_set_word(bigint_t *big, int i, uint32_t word);
 int bigint_compare_u32(const bigint_t *big, uint32_t n);
 int bigint_compare_u64(const bigint_t *big, uint64_t n);
 int bigint_compare_2k(const bigint_t *big, uint32_t bit);
+int bigint_compare_2kless1(const bigint_t *big, uint32_t k);
 int bigint_compare(const bigint_t *a, const bigint_t *b);
 uint32_t bigint_get_2k_geq(const bigint_t *big);
 uint32_t bigint_truncate_u32(const bigint_t *big);
@@ -44,25 +46,23 @@ void bigint_shift_right(bigint_t *big, uint32_t n);
 void bigint_mul_u32(bigint_t *big, uint32_t x);
 void bigint_mul_u64(bigint_t *big, uint64_t x);
 void bigint_mul_2k(bigint_t *big, uint32_t bit);
-void bigint_mul(bigint_t *big, const bigint_t *x);
+void bigint_mul(bigint_t *big, const bigint_t *x, bigint_t *aux);
 void bigint_div_u32(bigint_t *big, uint32_t div, uint32_t *res);
 void bigint_div_u64(bigint_t *big, uint64_t div, uint64_t *res);
 void bigint_div_2k(bigint_t *big, uint32_t k);
 void bigint_div(bigint_t *big, const bigint_t *div, bigint_t *res);
-void bigint_kdiv_u32(bigint_t *big, uint32_t div, uint32_t *res);
-void bigint_kdiv_u64(bigint_t *big, uint64_t div, uint64_t *res);
-void bigint_kdiv_2kless1(bigint_t *big, uint32_t k, bigint_t *res);
-void bigint_kdiv(bigint_t *big, const bigint_t *div, bigint_t *res);
-void bigint_mod_u32(const bigint_t *big, uint32_t k, uint32_t *res);
-void bigint_mod_u64(const bigint_t *big, uint32_t k, uint64_t *res);
+void bigint_div_2kless1(bigint_t *big, uint32_t k, bigint_t *res);
+void bigint_div_fast(bigint_t *big, const bigint_t *div, bigint_t *res,
+	             bigint_t *aux1, bigint_t *aux2, bigint_t *aux3);
 void bigint_mod_2k(bigint_t *big, uint32_t k);
-void bigint_mod_2kless1(const bigint_t *big, uint32_t k, bigint_t *res);
-void bigint_mod(const bigint_t *big, const bigint_t *div, bigint_t *res);
+void bigint_mod_2kless1(bigint_t *big, uint32_t k);
+void bigint_mod(bigint_t *big, const bigint_t *div,
+		bigint_t *aux1, bigint_t *aux2, bigint_t *aux3);
 void bigint_get_binary_string(const bigint_t *big, char *str);
 void bigint_get_hexadec_string(const bigint_t *big, char *str);
 void bigint_get_decimal_string(const bigint_t *big, char* str);
 void bigint_pow2(bigint_t *big);
-void bigint_pow(bigint_t *big, uint32_t p);
+void bigint_pow(bigint_t *big, uint32_t p, bigint_t *aux);
 void bigint_sqrt(bigint_t *big, bigint_t *res);
   
 #endif

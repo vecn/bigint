@@ -1,11 +1,3 @@
-/*
- * TODO:
- *   > Handle negatives.
- *   > creator receives #bits instead of #words
- *   > Refactor (delete) u32 versions in favor of u64
- *
- */
-
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -16,9 +8,11 @@
 #define NMAX  0xFFFFFFFF
 #define SET1 0x80000000
 #define BITSXWORD 32
+#define BXW_MOD_MASK 31
+#define BXW_2K 5
               /* Notice that for any unsigned integer X:
-	       *    X / 32 = X >> 5
-               *    X % 32 = X & 31
+	       *    X / 32 = X >> 5  BXW_2K
+               *    X % 32 = X & 31  BXW_MOD_MASK
 	       */
 
 #define MAX(a,b) (((a)>(b))?(a):(b))
@@ -36,7 +30,11 @@ static uint32_t dec_to_u32(const char *dec, int len, uint32_t *pow10);
 static int digit_decimal(char c);
 static void bigint_update_len(bigint_t *big);
 static uint32_t bigint_get_right_most_on_bit(const bigint_t *big);
+static int has_off_bits(const bigint_t *big);
+static uint32_t index_of_msbit_in_word(uint32_t word);
 static void bigint_add_from_word(bigint_t *big, const bigint_t *add, uint32_t w);
+static void add_N_div2k(bigint_t *big, const bigint_t *add, uint32_t k);
+static void set_div2k_plus_res2k(bigint_t *big, uint32_t k);
 static void bigint_shift_left_bits(bigint_t *big, uint32_t n);
 static void bigint_shift_left_words(bigint_t *big, uint32_t n);
 static void bigint_shift_right_bits(bigint_t *big, uint32_t n);
@@ -234,7 +232,7 @@ static uint32_t bigint_get_right_most_on_bit(const bigint_t *big)
 			ix ++;
 	
 		uint32_t w = big->bits[ix];
-		ix = ix * BITSXWORD;
+		ix = ix << BXW_2K;
 		while (!(w & 1)) {
 			ix ++;
 			w >>= 1;
@@ -307,10 +305,10 @@ int bigint_is_2k(const bigint_t *big)
 			count += h[word & 15];
 			word >>= 4;
 		}
-		if (count > 0)
+		if (count > 1)
 			break;
 	}
-	return (count > 0)?1:0;
+	return (count > 1) ? 0 : 1;
 }
 
 int bigint_get_word(const bigint_t *big, int i, uint32_t *word)
@@ -378,13 +376,13 @@ int bigint_compare_2k(const bigint_t *big, uint32_t bit)
 	if (big->len == 0)
 		return -1;
 	
-	uint32_t aux = 1 + (bit >> 5); /* aux <- 2^k length */
+	uint32_t aux = 1 + (bit >> BXW_2K); /* aux <- 2^k length */
 	if (big->len < aux) {
 		return -1;
 	} else if (big->len > aux) {
 		return 1;
 	} else {
-		bit -= (bit >> 5) << 5;
+		bit -= (bit >> BXW_2K) << BXW_2K;
 		uint32_t bit2 = 0;
 		aux = big->bits[big->len - 1]; /* aux <- last word */
 		while (aux) {
@@ -407,6 +405,40 @@ int bigint_compare_2k(const bigint_t *big, uint32_t bit)
 	}
 }
 
+int bigint_compare_2kless1(const bigint_t *big, uint32_t k)
+{
+	uint32_t bk = bigint_index_of_msbit(big);
+	if (k - 1 < bk) {
+		return 1;
+	} else if (k - 1 > bk) {
+		return -1;
+	} else {
+		return has_off_bits(big) ? (-1) : 0;
+	}
+}
+
+static int has_off_bits(const bigint_t *big)
+{
+	/* Return 1 if binary contains at least one zero
+	 * Return 0 if binary is only made of one bits (2^k-1)
+	 */
+	if (big->len == 0)
+		return 1;
+	
+	uint32_t i = 0;
+	for (i = 0; i < big->len - 1; i ++) {
+		if (big->bits[i] < NMAX)
+			return 1;
+	}
+	uint32_t word = big->bits[i];
+	while (word) {
+		if (!(word & 1U))
+			return 1;
+		word >>= 1;
+	}
+	return 0;
+}
+
 int bigint_compare(const bigint_t *a, const bigint_t *b)
 {
 	if (a->len > b->len) {
@@ -424,15 +456,32 @@ int bigint_compare(const bigint_t *a, const bigint_t *b)
 	}
 }
 
+static uint32_t index_of_msbit_in_word(uint32_t word)
+{
+	if (word) {
+		uint32_t byte = 1;
+		while ((uint64_t)word >> (byte << 3)) {
+			byte ++;
+		}
+		int bit = (byte - 1) << 3;
+		while (word >> bit) {
+			bit ++;
+		}
+		return bit - 1;
+	} else {
+		return 0;
+	}
+}
+
 uint32_t bigint_index_of_msbit(const bigint_t *big)
 {
-	uint32_t msbit = (big->len - 1U) << 5;
-	uint32_t word = big->bits[big->len - 1];
-	uint32_t bit = 1;
-	while ((word >> bit) > 0) {
-		bit ++;
+	if (big->len) {
+		uint32_t msbit = (big->len - 1) << BXW_2K;
+		uint32_t word = big->bits[big->len - 1];
+		return msbit + index_of_msbit_in_word(word);
+	} else {
+		return 0;
 	}
-	return msbit + bit;
 }
 
 uint32_t bigint_get_2k_geq(const bigint_t *big)
@@ -502,8 +551,8 @@ void bigint_add_u64(bigint_t *big, uint64_t add)
 
 void bigint_add_2k(bigint_t *big, uint32_t bit)
 {
-	uint32_t word = bit >> 5;
-	bit -= (word << 5);	
+	uint32_t word = bit >> BXW_2K;
+	bit -= (word << BXW_2K);
 	uint64_t sum = 1;
 	sum <<= bit;
 	
@@ -534,10 +583,13 @@ static void bigint_add_from_word(bigint_t *big, const bigint_t *add, uint32_t w)
 
 	uint64_t sum = 0;
 	for (int i = w; i < len; i++) {
-		if (i < add->len) 
+		if (i < add->len) {
 			sum += (uint64_t) big->bits[i] + add->bits[i];
-		else
+		} else {
+			if (!sum)
+				break;
 			sum += (uint64_t) big->bits[i];
+		}
 		big->bits[i] = (uint32_t) sum;
 		sum >>= BITSXWORD;
 	}
@@ -577,8 +629,8 @@ void bigint_subtract_u32(bigint_t *big, uint32_t num)
 void bigint_subtract_2k(bigint_t *big, uint32_t bit)
 /* Big must be greater or equal than 2^(bit) */
 {
-	uint32_t word = bit >> 5;
-	bit -= (word << 5);	
+	uint32_t word = bit >> BXW_2K;
+	bit -= (word << BXW_2K);	
 	uint64_t borrow = 1;
 	borrow <<= bit;
 	
@@ -657,13 +709,13 @@ static void bigint_shift_left_words(bigint_t *big, uint32_t n)
 void bigint_shift_left(bigint_t *big, uint32_t n)
 {
 	if (n > 0) {
-		uint32_t w = n / BITSXWORD;
+		uint32_t w = n >> BXW_2K;
 		int req_len = 1 + w + big->len;
 		if (req_len > big->words)
 			bigint_duplicate_words(big, req_len);
 
 		bigint_shift_left_words(big, w);
-		bigint_shift_left_bits(big, n % BITSXWORD);
+		bigint_shift_left_bits(big, n & BXW_MOD_MASK);
 	}
 }
 
@@ -711,8 +763,8 @@ static void bigint_shift_right_words(bigint_t *big, uint32_t n)
 
 void bigint_shift_right(bigint_t *big, uint32_t n)
 {
-	bigint_shift_right_words(big, n / BITSXWORD);
-	bigint_shift_right_bits(big, n % BITSXWORD);
+	bigint_shift_right_words(big, n >> BXW_2K);
+	bigint_shift_right_bits(big, n & BXW_MOD_MASK);
 }
 
 void bigint_mul_u32(bigint_t *big, uint32_t x)
@@ -749,7 +801,7 @@ void bigint_mul_u64(bigint_t *big, uint64_t x)
 				bigint_set_u32(big, 0);
 	    
 			int shift_bits = 0;
-			for (uint32_t i = 1; i < 2 * BITSXWORD - 1; i++) {
+			for (uint32_t i = 1; i < (2 << BXW_2K) - 1; i++) {
 				if (x & ((uint64_t)1 << i)) {
 					bigint_shift_left(init, i - shift_bits);
 					shift_bits = i;
@@ -766,8 +818,12 @@ void bigint_mul_2k(bigint_t *big, uint32_t k)
 	bigint_shift_left(big, k);
 }
 
-void bigint_mul(bigint_t *big, const bigint_t *x)
+void bigint_mul(bigint_t *big, const bigint_t *x, bigint_t *aux)
 {
+	/* Return multiplication (big * x).
+	 * aux is an auxiliary struc used in computation, and must allocate
+	 * same size than "big".
+	 */
 	if (!bigint_is_zero(big)) {
 		if (bigint_is_zero(x)) {
 			bigint_set_u32(big, 0);
@@ -775,31 +831,30 @@ void bigint_mul(bigint_t *big, const bigint_t *x)
 			uint32_t rmbit = bigint_get_right_most_on_bit(x);
 			bigint_shift_left(big, rmbit);
 	    
-			bigint_t *init = bigint_clone(big);
+			bigint_copy(aux, big);
 			int shift_bits = rmbit;
-			uint32_t rmword = rmbit / BITSXWORD;
+			uint32_t rmword = rmbit >> BXW_2K;
 	    
-			for (uint32_t b = rmbit % BITSXWORD + 1; b < BITSXWORD; b++) {
+			for (uint32_t b = (rmbit & BXW_MOD_MASK) + 1; b < BITSXWORD; b++) {
 				if (x->bits[rmword] & (1 << b)) {
-					uint32_t i = rmword * BITSXWORD + b;
-					bigint_shift_left(init, i - shift_bits);
+					uint32_t i = (rmword << BXW_2K) + b;
+					bigint_shift_left(aux, i - shift_bits);
 					shift_bits = i;
-					bigint_add_from_word(big, init, rmword);
+					bigint_add_from_word(big, aux, rmword);
 				}
 			}
 			for (uint32_t w = rmword + 1; w < x->len; w++) {
 				if (x->bits[w]) {
 					for (uint32_t b = 0; b < BITSXWORD; b++) {
 						if (x->bits[w] & (1 << b)) {
-							uint32_t i = w * BITSXWORD + b;
-							bigint_shift_left(init, i - shift_bits);
+							uint32_t i = (w << BXW_2K) + b;
+							bigint_shift_left(aux, i - shift_bits);
 							shift_bits = i;
-							bigint_add_from_word(big, init, w);
+							bigint_add_from_word(big, aux, w);
 						}
 					}
 				}
 			}
-			bigint_destroy(init);
 		}
 	}
 }
@@ -847,7 +902,7 @@ void bigint_div_u64(bigint_t *big, uint64_t div, uint64_t *res)
 				*res = 0;
 				int lmword = big->len;
 				for (int b = BITSXWORD - 1; b >= 0; b--) {
-					uint32_t i = lmword * BITSXWORD + b;
+					uint32_t i = (lmword << BXW_2K) + b;
 					uint32_t mask = (1 << b);
 					(*res) <<= 1;
 					if (big->bits[lmword] & mask)
@@ -863,7 +918,7 @@ void bigint_div_u64(bigint_t *big, uint64_t div, uint64_t *res)
 				for (int w = lmword - 1; w >= 0; w--) {
 					if (big->bits[w] || *res) {
 						for (int b = BITSXWORD - 1; b >= 0; b--) {
-							uint32_t i = w * BITSXWORD + b;
+							uint32_t i = (w << BXW_2K) + b;
 							uint32_t mask = (1 << b);
 							(*res) <<= 1;
 							if (big->bits[w] & mask)
@@ -911,7 +966,7 @@ void bigint_div(bigint_t *big, const bigint_t *div, bigint_t *res)
 				bigint_set_u32(res, 0);
 				int lmword = big->len;
 				for (int b = BITSXWORD - 1; b >= 0; b--) {
-					uint32_t i = lmword * BITSXWORD + b;
+					uint32_t i = (lmword << BXW_2K) + b;
 					uint32_t mask = (1 << b);
 					bigint_shift_left(res, 1);
 					if (big->bits[lmword] & mask)
@@ -927,7 +982,7 @@ void bigint_div(bigint_t *big, const bigint_t *div, bigint_t *res)
 				for (int w = lmword - 1; w >= 0; w--) {
 					if (big->bits[w] || bigint_gt(res, 0)) {
 						for (int b = BITSXWORD - 1; b >= 0; b--) {
-							uint32_t i = w * BITSXWORD + b;
+							uint32_t i = (w << BXW_2K) + b;
 							uint32_t mask = (1 << b);
 							bigint_shift_left(res, 1);
 							if (big->bits[w] & mask)
@@ -948,207 +1003,139 @@ void bigint_div(bigint_t *big, const bigint_t *div, bigint_t *res)
 	}
 }
 
-void bigint_kdiv_u32(bigint_t *big, uint32_t div, uint32_t *res)
+void bigint_div_2kless1(bigint_t *big, uint32_t k, bigint_t *res)
 {
-	bigint_t *bigdiv = bigint_create(big->words);
-	bigint_t *q = bigint_create(big->words);
-	bigint_set_u32(q, 0);
-	bigint_t *delta = bigint_create(big->words);
-	bigint_set_u32(delta, 0);
-	uint32_t n = bigint_get_2k_geq(big);
-	bigint_add_2k(delta, n);
-	bigint_substract_u32(delta, div);
-
-	while (bigint_compare_2k(big, n) > 0 &&
-	       bigint_compare_u32(big, div) > 0) {
-		bigint_copy(bigdiv, big);
-		bigint_div_2k(bigdiv, n);
-		bigint_add(q, bigdiv);
-
-		bigint_mul(bigdiv, delta);
-		
-		bigint_mod_2k(big, n);
-		bigint_add(big, bigdiv);
-	}
-
-	if (bigint_compare_u32(big, div) >= 0) {
-		bigint_add_u32(q, 1);
-		bigint_substract_u32(big, div);
-	}
-
-	*res = bigint_truncate_u32(big);
-	bigint_copy(big, q);
-	
-	bigint_destroy(bigdiv);
-	bigint_destroy(q);
-	bigint_destroy(delta);
-}
-
-void bigint_kdiv_u64(bigint_t *big, uint64_t div, uint64_t *res)
-{
-	bigint_t *bigdiv = bigint_create(big->words);
-	bigint_t *q = bigint_create(big->words);
-	bigint_set_u32(q, 0);
-	bigint_t *delta = bigint_create(big->words);
-	bigint_set_u32(delta, 0);
-	uint32_t n = bigint_get_2k_geq(big);
-	bigint_add_2k(delta, n);
-	bigint_substract_u32(delta, div);
-
-	while (bigint_compare_2k(big, n) > 0 &&
-	       bigint_compare_u64(big, div) > 0) {
-		bigint_copy(bigdiv, big);
-		bigint_div_2k(bigdiv, n);
-		bigint_add(q, bigdiv);
-
-		bigint_mul(bigdiv, delta);
-		
-		bigint_mod_2k(big, n);
-		bigint_add(big, bigdiv);
-	}
-
-	if (bigint_compare_u64(big, div) >= 0) {
-		bigint_add_u32(q, 1);
-		bigint_substract_u64(big, div);
-	}
-
-	*res = bigint_truncate_u64(big);
-	bigint_copy(big, q);
-	
-	bigint_destroy(bigdiv);
-	bigint_destroy(q);
-	bigint_destroy(delta);
-}
-
-void bigint_kdiv_2kless1(bigint_t *big, uint32_t k, bigint_t *res)
-{
-	bigint_t *bigdiv = bigint_create(big->words);
-	bigint_t *q = bigint_create(big->words);
-	bigint_set_u32(q, 0);
-
-	if (bigint_compare_2k(big, k) >= 0) {
-		bigint_copy(bigdiv, big);
-		bigint_div_2k(bigdiv, k);
-		bigint_add(q, bigdiv);
-		
-		bigint_mod_2k(big, n);
-		bigint_add(big, bigdiv);
-	}
-
-	bigint_add_u32(big, 1);
-	if (bigint_compare_2k(big, k) >= 0) {
-		bigint_add_u32(q, 1);
-		bigint_substract_2k(big, k);
-	}
-	bigint_substract_u32(big, 1);
-
 	bigint_copy(res, big);
-	bigint_copy(big, q);
+	bigint_set_u32(big, 0);
 	
-	bigint_destroy(bigdiv);
-	bigint_destroy(q);
+	while (bigint_compare_2k(res, k) >= 0) {
+		add_N_div2k(big, res, k);
+		set_div2k_plus_res2k(res, k);
+	}
+
+	if (bigint_compare_2kless1(res, k) >= 0) {
+		bigint_add_u32(big, 1);
+		bigint_subtract_2k(res, k);
+	}
 }
 
-void bigint_kdiv(bigint_t *big, const bigint_t *div, bigint_t *res)
+static void add_N_div2k(bigint_t *big, const bigint_t *add, uint32_t k)
 {
-	bigint_t *bigdiv = bigint_create(big->words);
-	bigint_t *q = bigint_create(big->words);
-	bigint_set_u32(q, 0);
-	bigint_t *delta = bigint_create(big->words);
-	bigint_set_u32(delta, 0);
-	uint32_t n = bigint_get_2k_geq(big);
-	bigint_add_2k(delta, n);
-	bigint_substract_u32(delta, div);
+	/* Return big + adding / 2k */
+	uint32_t iword = k >> BXW_2K;
+	uint32_t ibit = k & BXW_MOD_MASK;
+        
+	uint32_t len = MAX(big->len, add->len - iword);
+	if (len > big->words)
+		bigint_duplicate_words(big, len);
 
-	while (bigint_compare_2k(big, n) > 0 &&
-	       bigint_compare(big, div) > 0) {
-		bigint_copy(bigdiv, big);
-		bigint_div_2k(bigdiv, n);
-		bigint_add(q, bigdiv);
-
-		bigint_mul(bigdiv, delta);
-		
-		bigint_mod_2k(big, n);
-		bigint_add(big, bigdiv);
+	uint32_t i;
+	uint64_t sum = 0;
+	for (i = 0; i < len; i++) {
+		uint32_t j = i + iword;
+		if (j < add->len) {
+			uint32_t adding = (add->bits[j] >> ibit);
+			if (j + 1 < add->len) {
+				int N = BITSXWORD - ibit;
+				adding |= (add->bits[j + 1] << N);
+			}
+			sum += (uint64_t) big->bits[i] + adding;
+		} else {
+			if (!sum)
+				break;
+			sum += (uint64_t) big->bits[i];
+		}
+		big->bits[i] = (uint32_t) sum;
+		sum >>= BITSXWORD;
 	}
-
-	if (bigint_compare(big, div) >= 0) {
-		bigint_add_u32(q, 1);
-		bigint_substract(big, div);
+	if (sum) {
+		big->bits[len] = sum;
+		len ++;
 	}
+	big->len = len;
+}
 
+static void set_div2k_plus_res2k(bigint_t *big, uint32_t k)
+{
+	/* Return big / 2k + big % 2k
+	 * Example:
+	 *  Big: 101101101111
+	 *            ^
+	 *    k: 6
+	 *  Big / k:  101101
+	 *  Big % k:  101111
+	 *  Result : 1011100
+	 */
+	uint32_t iword = k >> BXW_2K;
+	uint32_t ibit = k & BXW_MOD_MASK;
+	int cbit = BITSXWORD - ibit;
+	
+	uint32_t len = MAX(iword, big->len - iword);
+
+	uint32_t i;
+	uint64_t sum = 0;
+	for (i = 0; i < len; i++) {
+		uint32_t j = i + iword;
+		if (j < big->len) {
+			uint32_t adding = big->bits[j] >> ibit;
+			if (j + 1 < big->len) {
+				adding |= big->bits[j + 1] << cbit;
+			}
+			if (j == iword)
+				big->bits[j] = (big->bits[j] << cbit) >> cbit;
+			else
+				big->bits[j] = 0;
+			sum += (uint64_t) big->bits[i] + adding;
+		} else {
+			if (!sum)
+				break;
+			sum += (uint64_t) big->bits[i];
+		}
+		big->bits[i] = (uint32_t) sum;
+		sum >>= BITSXWORD;
+	}
+	if (big->bits[len-1])
+		big->len = len;
+	else
+		big->len = len - 1;
+}
+
+void bigint_div_fast(bigint_t *big, const bigint_t *div, bigint_t *res,
+		     bigint_t *aux1, bigint_t *aux2, bigint_t *aux3)
+{
+	/* Perform 10x better than bigint_div if quotient and divisor have 
+	 * similar magnitude.
+	 *  > aux1 (delta) and aux2 (quotient) are used in computation
+	 */
 	bigint_copy(res, big);
-	bigint_copy(big, q);
-	
-	bigint_destroy(bigdiv);
-	bigint_destroy(q);
-	bigint_destroy(delta);
-}
+	bigint_set_u32(big, 0);
+	bigint_set_u32(aux1, 0);
+	uint32_t n = bigint_get_2k_geq(div);
+	bigint_add_2k(aux1, n);
+	bigint_subtract(aux1, div);
 
-void bigint_mod_u32(const bigint_t *big, uint32_t k, uint32_t *res)
-{
-	bigint_t *bigdiv = bigint_create(big->words);
-	bigint_t *delta = bigint_create(big->words);
-	bigint_set_u32(delta, 0);
-	uint32_t n = bigint_get_2k_geq(big);
-	bigint_add_2k(delta, n);
-	bigint_substract_u32(delta, div);
+	while (bigint_compare_2k(res, n) > 0 &&
+	       bigint_compare(res, div) > 0) {
+		bigint_copy(aux2, res);
+		bigint_div_2k(aux2, n);
+		bigint_add(big, aux2);
 
-	while (bigint_compare_2k(big, n) > 0 &&
-	       bigint_compare_u32(big, div) > 0) {
-		bigint_copy(bigdiv, big);
-		bigint_div_2k(bigdiv, n);
-		bigint_mul(bigdiv, delta);
+		bigint_mul(aux2, aux1, aux3);
 		
-		bigint_mod_2k(big, n);
-		bigint_add(big, bigdiv);
+		bigint_mod_2k(res, n);
+		bigint_add(res, aux2);
 	}
 
-	if (bigint_compare_u32(big, div) >= 0) {
-		bigint_substract_u32(big, div);
+	if (bigint_compare(res, div) >= 0) {
+		bigint_add_u32(big, 1);
+		bigint_subtract(res, div);
 	}
-
-	*res = bigint_truncate_u32(big);
-	
-	bigint_destroy(bigdiv);
-	bigint_destroy(delta);
-}
-
-void bigint_mod_u64(const bigint_t *big, uint32_t k, uint64_t *res)
-{
-	bigint_t *bigdiv = bigint_create(big->words);
-	bigint_t *delta = bigint_create(big->words);
-	bigint_set_u32(delta, 0);
-	uint32_t n = bigint_get_2k_geq(big);
-	bigint_add_2k(delta, n);
-	bigint_substract_u32(delta, div);
-
-	while (bigint_compare_2k(big, n) > 0 &&
-	       bigint_compare_u64(big, div) > 0) {
-		bigint_copy(bigdiv, big);
-		bigint_div_2k(bigdiv, n);
-
-		bigint_mul(bigdiv, delta);
-		
-		bigint_mod_2k(big, n);
-		bigint_add(big, bigdiv);
-	}
-
-	if (bigint_compare_u64(big, div) >= 0) {
-		bigint_add_u32(q, 1);
-		bigint_substract_u64(big, div);
-	}
-
-	*res = bigint_truncate_u64(big);
-	
-	bigint_destroy(bigdiv);
-	bigint_destroy(delta);
 }
 
 void bigint_mod_2k(bigint_t *big, uint32_t k)
 {
 	uint32_t mod = k & 31U;
-	uint32_t iw = (k >> 5) - ((mod > 0) ? 0 : 1);
+	uint32_t iw = (k >> BXW_2K) - ((mod > 0) ? 0 : 1);
 	uint32_t mask = (1U << mod) - 1;
 	
 	uint32_t word;
@@ -1161,70 +1148,57 @@ void bigint_mod_2k(bigint_t *big, uint32_t k)
 	}
 	big->len = iw + 1;
 	
-	bigint_set_word(res, iw, word & mask);
+	bigint_set_word(big, iw, word & mask);
 }
 
-void bigint_mod_2kless1(const bigint_t *big, uint32_t k, bigint_t *res)
-{
-	bigint_t *bigdiv = bigint_create(big->words);
-
-	bigint_copy(res, big);
-
-	if (bigint_compare_2k(res, k) >= 0) {
-		bigint_copy(bigdiv, res);
-		bigint_div_2k(bigdiv, k);
-		bigint_add(q, bigdiv);
-		
-		bigint_mod_2k(res, n);
-		bigint_add(res, bigdiv);
+void bigint_mod_2kless1(bigint_t *big, uint32_t k)
+{	
+	while (bigint_compare_2k(big, k) >= 0) {
+		set_div2k_plus_res2k(big, k);
 	}
 
-	bigint_add_u32(res, 1);
-	if (bigint_compare_2k(res, k) >= 0) {
-		bigint_substract_2k(res, k);
+	if (bigint_compare_2kless1(big, k) >= 0) {
+		bigint_subtract_2k(big, k);
 	}
-	bigint_substract_u32(res, 1);
-	
-	bigint_destroy(bigdiv);
 }
 
-void bigint_mod(const bigint_t *big, const bigint_t *div, bigint_t *res)
+void bigint_mod(bigint_t *big, const bigint_t *div,
+		bigint_t *aux1, bigint_t *aux2, bigint_t *aux3)
 {
-	bigint_t *bigdiv = bigint_create(big->words);
-	bigint_t *delta = bigint_create(big->words);
-	bigint_set_u32(delta, 0);
-	uint32_t n = bigint_get_2k_geq(big);
-	bigint_add_2k(delta, n);
-	bigint_substract_u32(delta, div);
+	/* Auxiliary structures used in computation:
+	 *   > aux1 (delta)
+	 *   > aux2 (iterative quotient)
+	 */
+	bigint_set_u32(aux1, 0);
+	uint32_t n = bigint_get_2k_geq(div);
+	bigint_set_u32(aux1, 0);
+	bigint_add_2k(aux1, n);
+	bigint_subtract(aux1, div);
 
-	bigint_copy(res, big);
+	while (bigint_compare_2k(big, n) > 0 &&
+	       bigint_compare(big, div) > 0) {
+		bigint_copy(aux2, big);
+		bigint_div_2k(aux2, n);
 
-	while (bigint_compare_2k(res, n) > 0 &&
-	       bigint_compare(res, div) > 0) {
-		bigint_copy(bigdiv, res);
-		bigint_div_2k(bigdiv, n);
-
-		bigint_mul(bigdiv, delta);
+		bigint_mul(aux2, aux1, aux3);
 		
-		bigint_mod_2k(res, n);
-		bigint_add(res, bigdiv);
+		bigint_mod_2k(big, n);
+		bigint_add(big, aux2);
 	}
 
-	if (bigint_compare(res, div) >= 0) {
-		bigint_substract(res, div);
+	if (bigint_compare(big, div) >= 0) {
+		bigint_subtract(big, div);
 	}
-	
-	bigint_destroy(bigdiv);
-	bigint_destroy(delta);
 }
 
 void bigint_get_binary_string(const bigint_t *big, char *str)
 {
+	uint32_t i, j;
 	uint32_t len = big->len;
-	for (int i = 0; i < len; i++) {
+	for (i = 0; i < len; i++) {
 		uint32_t a = big->bits[i];
-		for (int j = 0; j < BITSXWORD; j++) {
-			int idx = len - 1 - i * BITSXWORD - j;
+		for (j = 0; j < BITSXWORD; j++) {
+			uint32_t idx = ((len - i) << BXW_2K) - j - 1;
 			if (a & 1)
 				str[idx] = '1';
 			else
@@ -1232,7 +1206,7 @@ void bigint_get_binary_string(const bigint_t *big, char *str)
 			a >>= 1;
 		}
 	}
-	str[len] = '\0';
+	str[len << BXW_2K] = '\0';
 }
 
 void bigint_get_hexadec_string(const bigint_t *big, char *str)
@@ -1334,11 +1308,11 @@ void bigint_pow2(bigint_t *big)
 	uint32_t rmbit = bigint_get_right_most_on_bit(init);
 	bigint_shift_left(big, rmbit);
 
-	uint32_t rmword = rmbit / BITSXWORD;
+	uint32_t rmword = rmbit >> BXW_2K;
 	    
-	for (uint32_t b = rmbit % BITSXWORD + 1; b < BITSXWORD; b++) {
+	for (uint32_t b = (rmbit & BXW_MOD_MASK) + 1; b < BITSXWORD; b++) {
 		if (init->bits[rmword] & (1 << b)) {
-			uint32_t i = rmword * BITSXWORD + b;
+			uint32_t i = (rmword << BXW_2K) + b;
 			bigint_shift_left(init, i);
 			bigint_add_from_word(big, init, rmword);
 			bigint_shift_right(init, i);
@@ -1348,7 +1322,7 @@ void bigint_pow2(bigint_t *big)
 		if (init->bits[w]) {
 			for (uint32_t b = 0; b < BITSXWORD; b++) {
 				if (init->bits[w] & (1 << b)) {
-					uint32_t i = w * BITSXWORD + b;
+					uint32_t i = (w << BXW_2K) + b;
 					bigint_shift_left(init, i);
 					bigint_add_from_word(big, init, w);
 					bigint_shift_right(init, i);
@@ -1359,7 +1333,7 @@ void bigint_pow2(bigint_t *big)
 	bigint_destroy(init);
 }
 
-void bigint_pow(bigint_t *big, uint32_t p)
+void bigint_pow(bigint_t *big, uint32_t p, bigint_t *aux)
 {
 	if (p == 0) {
 		bigint_set_u32(big, 1);
@@ -1368,7 +1342,7 @@ void bigint_pow(bigint_t *big, uint32_t p)
 	} else if (p > 2) {
 		bigint_t *q = bigint_clone(big);
 		for (int i = 1; i < p; i++)
-			bigint_mul(big, q);
+			bigint_mul(big, q, aux);
 		bigint_destroy(q);
 	}
 }
@@ -1425,7 +1399,7 @@ static uint32_t get_2k_4div_leq(const bigint_t *big)
 		w >>= 1;
 		bit ++;
 	}
-	return bit + (big->len - 1) << 5;
+	return bit + (big->len - 1) << BXW_2K;
 }
 
 static void sqrt_ubig(bigint_t *big, bigint_t *res)
