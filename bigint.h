@@ -61,7 +61,7 @@ void bigint_mod(bigint_t *big, const bigint_t *div,
 void bigint_get_binary_string(const bigint_t *big, char *str);
 void bigint_get_hexadec_string(const bigint_t *big, char *str);
 void bigint_get_decimal_string(const bigint_t *big, char* str);
-void bigint_pow2(bigint_t *big);
+void bigint_pow2(bigint_t *big, bigint_t *aux);
 void bigint_pow(bigint_t *big, uint32_t p, bigint_t *aux);
 void bigint_sqrt(bigint_t *big, bigint_t *res);
   

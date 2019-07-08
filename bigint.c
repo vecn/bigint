@@ -1023,6 +1023,9 @@ static void add_N_div2k(bigint_t *big, const bigint_t *add, uint32_t k)
 {
 	/* Return big + adding / 2k */
 	uint32_t iword = k >> BXW_2K;
+	if (iword >= add->len)
+		return;
+	
 	uint32_t ibit = k & BXW_MOD_MASK;
         
 	uint32_t len = MAX(big->len, add->len - iword);
@@ -1067,6 +1070,9 @@ static void set_div2k_plus_res2k(bigint_t *big, uint32_t k)
 	 *  Result : 1011100
 	 */
 	uint32_t iword = k >> BXW_2K;
+	if (iword >= big->len)
+		return;
+	
 	uint32_t ibit = k & BXW_MOD_MASK;
 	int cbit = BITSXWORD - ibit;
 	
@@ -1094,10 +1100,11 @@ static void set_div2k_plus_res2k(bigint_t *big, uint32_t k)
 		big->bits[i] = (uint32_t) sum;
 		sum >>= BITSXWORD;
 	}
-	if (big->bits[len-1])
+	if (big->bits[len-1]) {
 		big->len = len;
-	else
+	} else {
 		big->len = len - 1;
+	}
 }
 
 void bigint_div_fast(bigint_t *big, const bigint_t *div, bigint_t *res,
@@ -1302,35 +1309,34 @@ void bigint_get_decimal_string(const bigint_t *big, char* str)
 	}
 }
 
-void bigint_pow2(bigint_t *big)
+void bigint_pow2(bigint_t *big, bigint_t *aux)
 {
-	bigint_t *init = bigint_clone(big);
-	uint32_t rmbit = bigint_get_right_most_on_bit(init);
+	bigint_copy(aux, big);
+	uint32_t rmbit = bigint_get_right_most_on_bit(aux);
 	bigint_shift_left(big, rmbit);
 
 	uint32_t rmword = rmbit >> BXW_2K;
 	    
 	for (uint32_t b = (rmbit & BXW_MOD_MASK) + 1; b < BITSXWORD; b++) {
-		if (init->bits[rmword] & (1 << b)) {
+		if (aux->bits[rmword] & (1 << b)) {
 			uint32_t i = (rmword << BXW_2K) + b;
-			bigint_shift_left(init, i);
-			bigint_add_from_word(big, init, rmword);
-			bigint_shift_right(init, i);
+			bigint_shift_left(aux, i);
+			bigint_add_from_word(big, aux, rmword);
+			bigint_shift_right(aux, i);
 		}
 	}
-	for (uint32_t w = rmword + 1; w < init->len; w++) {
-		if (init->bits[w]) {
+	for (uint32_t w = rmword + 1; w < aux->len; w++) {
+		if (aux->bits[w]) {
 			for (uint32_t b = 0; b < BITSXWORD; b++) {
-				if (init->bits[w] & (1 << b)) {
+				if (aux->bits[w] & (1 << b)) {
 					uint32_t i = (w << BXW_2K) + b;
-					bigint_shift_left(init, i);
-					bigint_add_from_word(big, init, w);
-					bigint_shift_right(init, i);
+					bigint_shift_left(aux, i);
+					bigint_add_from_word(big, aux, w);
+					bigint_shift_right(aux, i);
 				}
 			}
 		}
 	}
-	bigint_destroy(init);
 }
 
 void bigint_pow(bigint_t *big, uint32_t p, bigint_t *aux)
@@ -1338,7 +1344,7 @@ void bigint_pow(bigint_t *big, uint32_t p, bigint_t *aux)
 	if (p == 0) {
 		bigint_set_u32(big, 1);
 	} else if (p == 2) {
-		bigint_pow2(big);
+		bigint_pow2(big, aux);
 	} else if (p > 2) {
 		bigint_t *q = bigint_clone(big);
 		for (int i = 1; i < p; i++)
