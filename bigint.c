@@ -1088,13 +1088,13 @@ static void set_div2k_plus_res2k(bigint_t *big, uint32_t k)
 	 *  Result : 1011100
 	 */
 	uint32_t iword = k >> BXW_2K;
-	if (iword >= big->len)
+	if (k == 0 || iword >= big->len)
 		return;
 	
 	uint32_t ibit = k & BXW_MOD_MASK;
-	int cbit = BITSXWORD - ibit;
+	uint32_t cbit = BITSXWORD - ibit;
 	
-	uint32_t len = MAX(iword, big->len - iword);
+	uint32_t len = big->len - iword;
 
 	uint32_t i;
 	uint64_t sum = 0;
@@ -1102,10 +1102,10 @@ static void set_div2k_plus_res2k(bigint_t *big, uint32_t k)
 		uint32_t j = i + iword;
 		if (j < big->len) {
 			uint32_t adding = big->bits[j] >> ibit;
-			if (j + 1 < big->len) {
+			if (j + 1 < big->len && ibit > 0) {
 				adding |= big->bits[j + 1] << cbit;
 			}
-			if (j == iword)
+			if (j == iword && ibit > 0)
 				big->bits[j] = (big->bits[j] << cbit) >> cbit;
 			else
 				big->bits[j] = 0;
@@ -1118,11 +1118,7 @@ static void set_div2k_plus_res2k(bigint_t *big, uint32_t k)
 		big->bits[i] = (uint32_t) sum;
 		sum >>= BITSXWORD;
 	}
-	if (big->bits[len-1]) {
-		big->len = len;
-	} else {
-		big->len = len - 1;
-	}
+	bigint_update_len(big);
 }
 
 void bigint_div_fast(bigint_t *big, const bigint_t *div, bigint_t *res,
