@@ -1094,7 +1094,7 @@ static void set_div2k_plus_res2k(bigint_t *big, uint32_t k)
 	uint32_t ibit = k & BXW_MOD_MASK;
 	uint32_t cbit = BITSXWORD - ibit;
 	
-	uint32_t len = big->len - iword;
+	uint32_t len = big->len;
 
 	uint32_t i;
 	uint64_t sum = 0;
