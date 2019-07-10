@@ -428,27 +428,19 @@ int bigint_compare_2k(const bigint_t *big, uint32_t bit)
 		return -1;
 	} else if (big->len > aux) {
 		return 1;
+	}
+	
+	uint32_t word_2k = 1U << (bit & BXW_MOD_MASK);
+	if (word_2k > big->bits[big->len - 1]) {
+		return -1;
+	} else if (word_2k < big->bits[big->len - 1]) {
+		return 1;
+	}
+	
+	if (bigint_is_2k(big)) {
+		return 0;
 	} else {
-		bit -= (bit >> BXW_2K) << BXW_2K;
-		uint32_t bit2 = 0;
-		aux = big->bits[big->len - 1]; /* aux <- last word */
-		while (aux) {
-			bit2 ++;
-			aux >>= 1;
-		}
-		bit2 --; /* bit2 is always > 0 after previous cycle*/
-		if (bit2 < bit) {
-			return -1;
-		} else if (bit2 > bit) {
-			return 1;
-		} else {
-			/* aux <- On-bits count */
-			aux = bigint_count_on_bits(big);
-			if (aux > 1)
-				return 1;
-			else
-				return 0;
-		}
+		return 1;
 	}
 }
 
