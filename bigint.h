@@ -38,7 +38,7 @@ void bigint_add_2k(bigint_t *big, uint32_t bit);
 void bigint_add(bigint_t *big, const bigint_t *add);
 void bigint_increment(bigint_t *big);
 void bigint_subtract_u32(bigint_t *big, uint32_t num, int *status);
-void bigint_subtract_2k(bigint_t *big, uint32_t bit);
+void bigint_subtract_2k(bigint_t *big, uint32_t bit, int *status);
 void bigint_subtract(bigint_t *big, const bigint_t *num, int *status);
 void bigint_decrement(bigint_t *big);
 void bigint_shift_left(bigint_t *big, uint32_t n);

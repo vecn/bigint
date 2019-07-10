@@ -10,8 +10,6 @@
  *          > 90% mul_2kless1, subtract_N_divk
  *          < 10% mul_2k, add_N_mulk
  *          ~ 50% word by word
- *  bigint_subtract_2k seems to have a bug (borrow is u64), fail if k > 63?
- *  bigint_subtract can return if borrow == 0 ?
  */
 #include <stdio.h>
 #include <string.h>
@@ -685,9 +683,10 @@ void bigint_subtract_u32(bigint_t *big, uint32_t num, int *status)
 		
 }
 
-void bigint_subtract_2k(bigint_t *big, uint32_t bit)
-/* Big must be greater or equal than 2^(bit) */
+void bigint_subtract_2k(bigint_t *big, uint32_t bit, int *status)
 {
+	reset_flag_nullsafe(status);
+	
 	uint32_t word = bit >> BXW_2K;
 	bit -= (word << BXW_2K);	
 	uint64_t borrow = 1;
@@ -696,9 +695,16 @@ void bigint_subtract_2k(bigint_t *big, uint32_t bit)
 	for (int i = word; i < big->len; i++) {
 		borrow = (uint64_t) big->bits[i] - borrow;
 		big->bits[i] = (uint32_t) borrow;
-		borrow = (borrow >> BITSXWORD) & 1; 
+		borrow = (borrow >> BITSXWORD) & 1;
+		if (!borrow)
+			break;
 	}
 	bigint_update_len(big);
+	
+	if (borrow) {
+		/* num is greater than big */
+		set_flag_nullsafe(status, STATUS_ERROR_BAD_INPUT);
+	}
 }
 
 void bigint_subtract(bigint_t *big, const bigint_t *num, int *status)
@@ -1084,7 +1090,7 @@ void bigint_div_2kless1(bigint_t *big, uint32_t k, bigint_t *res)
 	if (bigint_compare_2kless1(res, k) >= 0) {
 		bigint_add_u32(big, 1);
 		bigint_add_u32(res, 1);
-		bigint_subtract_2k(res, k);
+		bigint_subtract_2k(res, k, NULL);
 	}
 }
 
@@ -1231,7 +1237,7 @@ void bigint_mod_2kless1(bigint_t *big, uint32_t k)
 
 	if (bigint_compare_2kless1(big, k) >= 0) {
 		bigint_add_u32(big, 1);
-		bigint_subtract_2k(big, k);
+		bigint_subtract_2k(big, k, NULL);
 	}
 }
 
@@ -1487,7 +1493,7 @@ static void sqrt_ubig(bigint_t *big, bigint_t *res)
 			bigint_subtract(res, big, NULL);
 			bigint_add_2k(big, bit);
 		} else {
-			bigint_subtract_2k(big, bit);
+			bigint_subtract_2k(big, bit, NULL);
 		}
 		bigint_shift_right(big, 1);
 		if (bit < 2)
