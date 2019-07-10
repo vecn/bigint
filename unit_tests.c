@@ -5,12 +5,15 @@
 
 #include "bigint.h"
 
+#define N_EXEC_X_TEST 500000
+
 enum {
 	ALLOCATE,
 	EXECUTE,
 	FREE
 };
 
+int test_mul(int action, void **resources);
 int test_div_u32(int action, void **resources);
 int test_div(int action, void **resources);
 int test_div_2kless1(int action, void **resources);
@@ -23,8 +26,9 @@ static void print_summary(int N, int failed);
 
 int main()
 {
-	int N = 4;
-	int (*tests[4])(int, void**) = {
+	int N = 5;
+	int (*tests[5])(int, void**) = {
+		test_mul,
 		test_div_u32,
 		test_div,
 		test_div_2kless1,
@@ -40,7 +44,7 @@ static int run_tests(int N, int (*tests[])(int, void**))
 	int failed = 0;
 	int i;
 	for (i = 0; i < N; i++) {
-		if (!can_execute_test(500000, tests[i])) {
+		if (!can_execute_test(N_EXEC_X_TEST, tests[i])) {
 			printf("   Test %i failed\n", i);
 			failed ++;
 		}
@@ -88,10 +92,10 @@ static void print_summary(int N, int failed)
 		if (failed == N)
 			printf("All failed\n");
 		else
-			printf("%i failed and %i succeded\n",
+			printf("%i failed and %i succeeded\n",
 			       failed, N - failed);
 	} else {
-		printf("All succeded\n");
+		printf("All succeeded\n");
 	}
 }
 
@@ -117,6 +121,37 @@ int test_div_u32(int action, void **resources)
 	case FREE:
 		big = (bigint_t*) *resources;
 		bigint_destroy(big);
+		return 0;
+	}
+}
+
+int test_mul(int action, void **resources)
+{
+	int k = 70;
+	int bk = 128;
+	bigint_t **tri;
+	
+	switch (action) {
+	case ALLOCATE:
+		tri = malloc(3*sizeof(*tri));
+		tri[0] = bigint_create(100);
+		tri[1] = bigint_create(100);
+		tri[2] = bigint_create(100);
+		*resources = (void*) tri;
+		return 0;
+	case EXECUTE:
+		tri = (bigint_t**) *resources;
+		bigint_set_u32(tri[0], 2);
+		bigint_add_2k(tri[0], bk);
+		bigint_set_u32(tri[1], 24);
+		bigint_add_2k(tri[1], k);
+		bigint_mul(tri[0], tri[1], tri[2]);
+		return 0;
+	case FREE:
+		tri = (bigint_t**) *resources;
+		bigint_destroy(tri[0]);
+		bigint_destroy(tri[1]);
+		bigint_destroy(tri[2]);
 		return 0;
 	}
 }

@@ -10,6 +10,11 @@
  *          > 90% mul_2kless1, subtract_N_divk
  *          < 10% mul_2k, add_N_mulk
  *          ~ 50% word by word
+ * > bigint_get_binary_string ->  bigint_encode_base2(big, charset, str)
+ * > bigint_get_decimal_string ->  bigint_encode_base10
+ * > bigint_get_hexadec_string ->  bigint_encode_base16
+ * > bigint_encode_base64
+ * > bigint_get_prime(nbits) 
  */
 #include <stdio.h>
 #include <string.h>
@@ -51,6 +56,7 @@ static uint32_t bigint_get_right_most_on_bit(const bigint_t *big);
 static int has_off_bits(const bigint_t *big);
 static uint32_t index_of_msbit_in_word(uint32_t word);
 static void bigint_add_from_word(bigint_t *big, const bigint_t *add, uint32_t w);
+static void add_N_mul2k(bigint_t *big, const bigint_t *add, uint32_t k);
 static void add_N_div2k(bigint_t *big, const bigint_t *add, uint32_t k);
 static void set_div2k_plus_res2k(bigint_t *big, uint32_t k);
 static void bigint_shift_left_bits(bigint_t *big, uint32_t n);
@@ -895,38 +901,35 @@ void bigint_mul_2k(bigint_t *big, uint32_t k)
 void bigint_mul(bigint_t *big, const bigint_t *x, bigint_t *aux)
 {
 	/* Return multiplication (big * x).
-	 * aux is an auxiliary struc used in computation, and must allocate
+	 * aux is an auxiliary structure used in computation, and should allocate
 	 * same size than "big".
 	 */
-	if (!bigint_is_zero(big)) {
-		if (bigint_is_zero(x)) {
-			bigint_set_u32(big, 0);
-		} else {
-			uint32_t rmbit = bigint_get_right_most_on_bit(x);
-			bigint_shift_left(big, rmbit);
+	if (bigint_is_zero(big))
+		return;
+	
+	if (bigint_is_zero(x)) {
+		bigint_set_u32(big, 0);
+		return;
+	}
+	bigint_copy(aux, big);
+	
+	uint32_t rmbit = bigint_get_right_most_on_bit(x);
+	bigint_shift_left(big, rmbit);
 	    
-			bigint_copy(aux, big);
-			int shift_bits = rmbit;
-			uint32_t rmword = rmbit >> BXW_2K;
+	uint32_t rmword = rmbit >> BXW_2K;
 	    
-			for (uint32_t b = (rmbit & BXW_MOD_MASK) + 1; b < BITSXWORD; b++) {
-				if (x->bits[rmword] & (1 << b)) {
-					uint32_t i = (rmword << BXW_2K) + b;
-					bigint_shift_left(aux, i - shift_bits);
-					shift_bits = i;
-					bigint_add_from_word(big, aux, rmword);
-				}
-			}
-			for (uint32_t w = rmword + 1; w < x->len; w++) {
-				if (x->bits[w]) {
-					for (uint32_t b = 0; b < BITSXWORD; b++) {
-						if (x->bits[w] & (1 << b)) {
-							uint32_t i = (w << BXW_2K) + b;
-							bigint_shift_left(aux, i - shift_bits);
-							shift_bits = i;
-							bigint_add_from_word(big, aux, w);
-						}
-					}
+	for (uint32_t b = (rmbit & BXW_MOD_MASK) + 1; b < BITSXWORD; b++) {
+		if (x->bits[rmword] & (1 << b)) {
+			uint32_t i = (rmword << BXW_2K) + b;
+			add_N_mul2k(big, aux, i);
+		}
+	}
+	for (uint32_t w = rmword + 1; w < x->len; w++) {
+		if (x->bits[w]) {
+			for (uint32_t b = 0; b < BITSXWORD; b++) {
+				if (x->bits[w] & (1 << b)) {
+					uint32_t i = (w << BXW_2K) + b;
+					add_N_mul2k(big, aux, i);
 				}
 			}
 		}
@@ -1094,6 +1097,42 @@ void bigint_div_2kless1(bigint_t *big, uint32_t k, bigint_t *res)
 	}
 }
 
+static void add_N_mul2k(bigint_t *big, const bigint_t *add, uint32_t k)
+{
+	/* Return big + adding * 2k */
+	uint32_t iword = k >> BXW_2K;
+	uint32_t ibit = k & BXW_MOD_MASK;
+	uint32_t cbit = BITSXWORD - ibit;
+        
+	uint32_t len = MAX(big->len, add->len + iword + (ibit?1:0));
+	if (len > big->words)
+		bigint_duplicate_words(big, len);
+
+	uint32_t i;
+	uint64_t sum = 0;
+	for (i = 0; i < len; i++) {
+		uint32_t j = i + iword;
+		if (i < add->len) {
+			uint32_t adding = (add->bits[i] << ibit);
+			if (i && ibit) {
+				adding |= (add->bits[i - 1] >> cbit);
+			}
+			sum += (uint64_t) big->bits[j] + adding;
+		} else {
+			if (!sum)
+				break;
+			sum += (uint64_t) big->bits[j];
+		}
+		big->bits[j] = (uint32_t) sum;
+		sum >>= BITSXWORD;
+	}
+	if (sum) {
+		big->bits[len] = sum;
+		len ++;
+	}
+	big->len = len;
+}
+
 static void add_N_div2k(bigint_t *big, const bigint_t *add, uint32_t k)
 {
 	/* Return big + adding / 2k */
@@ -1102,6 +1141,7 @@ static void add_N_div2k(bigint_t *big, const bigint_t *add, uint32_t k)
 		return;
 	
 	uint32_t ibit = k & BXW_MOD_MASK;
+	uint32_t cbit = BITSXWORD - ibit;
         
 	uint32_t len = MAX(big->len, add->len - iword);
 	if (len > big->words)
@@ -1113,9 +1153,8 @@ static void add_N_div2k(bigint_t *big, const bigint_t *add, uint32_t k)
 		uint32_t j = i + iword;
 		if (j < add->len) {
 			uint32_t adding = (add->bits[j] >> ibit);
-			if (j + 1 < add->len) {
-				int N = BITSXWORD - ibit;
-				adding |= (add->bits[j + 1] << N);
+			if (j + 1 < add->len && ibit) {
+				adding |= (add->bits[j + 1] << cbit);
 			}
 			sum += (uint64_t) big->bits[i] + adding;
 		} else {
@@ -1159,10 +1198,10 @@ static void set_div2k_plus_res2k(bigint_t *big, uint32_t k)
 		uint32_t j = i + iword;
 		if (j < big->len) {
 			uint32_t adding = big->bits[j] >> ibit;
-			if (j + 1 < big->len && ibit > 0) {
+			if (j + 1 < big->len && ibit) {
 				adding |= big->bits[j + 1] << cbit;
 			}
-			if (j == iword && ibit > 0)
+			if (j == iword && ibit)
 				big->bits[j] = (big->bits[j] << cbit) >> cbit;
 			else
 				big->bits[j] = 0;
