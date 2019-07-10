@@ -1,9 +1,27 @@
+/*
+ * ToDo:
+ *  Refactor multiplication with 
+ *     add_N_mul2k(bigint_t *big, const bigint_t *add, uint32_t k);
+ *  Implement multiplication:
+ *    > Word by word
+ *    > mul_2k
+ *    > mul_2kless1: mul_2k, subtract_N_divk
+ *    > Generic mult: Depending on density of ones:
+ *          > 90% mul_2kless1, subtract_N_divk
+ *          < 10% mul_2k, add_N_mulk
+ *          ~ 50% word by word
+ *  bigint_subtract_2k seems to have a bug (borrow is u64), fail if k > 63?
+ *  bigint_subtract can return if borrow == 0 ?
+ */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
 
 #include "bigint.h"
+
+#define STATUS_SUCCESS 0
+#define STATUS_ERROR_BAD_INPUT 0x1
 
 #define NMAX  0xFFFFFFFF
 #define SET1 0x80000000
@@ -23,6 +41,8 @@ struct bigint_s {
 	uint32_t *bits;
 };
 
+static void reset_flag_nullsafe(int *holder);
+static void set_flag_nullsafe(int *holder, int value);
 static void bigint_duplicate_words(bigint_t *big, uint32_t minw);
 static uint32_t hex_to_u32(const char *hex, int len);
 static int digit_hex2int(char c);
@@ -45,6 +65,18 @@ static uint32_t sqrt_u32(uint32_t n, uint32_t *res);
 static uint64_t sqrt_u64(uint64_t n, uint64_t *res);
 static uint32_t get_2k_4div_leq(const bigint_t *big);
 static void sqrt_ubig(bigint_t *big, bigint_t *res);
+
+static void reset_flag_nullsafe(int *holder)
+{
+	if (holder)
+		*holder = 0;
+}
+
+static void set_flag_nullsafe(int *holder, int value)
+{
+	if (holder)
+		*holder |= value;
+}
 
 bigint_t* bigint_create(uint32_t words)
 {
@@ -629,18 +661,28 @@ void bigint_increment(bigint_t *big)
 	bigint_add_u32(big, 1);
 }
 
-void bigint_subtract_u32(bigint_t *big, uint32_t num)
-/* Big must be greater or equal than num */
+void bigint_subtract_u32(bigint_t *big, uint32_t num, int *status)
 {
+	reset_flag_nullsafe(status);
+	
 	uint64_t borrow = (uint64_t) big->bits[0] - num;
 	big->bits[0] = (uint32_t) borrow;
-	borrow = (borrow >> BITSXWORD) & 1; 
-	for (int i = 1; i < big->len && borrow; i++) {
+	borrow = (borrow >> BITSXWORD) & 1;
+	uint32_t i;
+	for (i = 1; i < big->len; i++) {
 		borrow = (uint64_t) big->bits[i] - borrow;
 		big->bits[i] = (uint32_t) borrow;
-		borrow = (borrow >> BITSXWORD) & 1; 
+		borrow = (borrow >> BITSXWORD) & 1;
+		if (!borrow)
+			break;
 	}
 	bigint_update_len(big);
+	
+	if (borrow) {
+		/* num is greater than big */
+		set_flag_nullsafe(status, STATUS_ERROR_BAD_INPUT);
+	}
+		
 }
 
 void bigint_subtract_2k(bigint_t *big, uint32_t bit)
@@ -659,19 +701,28 @@ void bigint_subtract_2k(bigint_t *big, uint32_t bit)
 	bigint_update_len(big);
 }
 
-void bigint_subtract(bigint_t *big, const bigint_t *num)
-/* Big must be greater or equal than num */
+void bigint_subtract(bigint_t *big, const bigint_t *num, int *status)
 {
+	reset_flag_nullsafe(status);
+	
 	uint64_t borrow = 0;
 	for (int i = 0; i < big->len; i++) {
-		if (i < num->len)
+		if (i < num->len) {
 			borrow = (uint64_t) big->bits[i] - num->bits[i] - borrow;
-		else
+		} else {
+			if (!borrow)
+				break;
 			borrow = (uint64_t) big->bits[i] - borrow;
+		}
 		big->bits[i] = (uint32_t) borrow;
 		borrow = (borrow >> BITSXWORD) & 1; 
 	}
 	bigint_update_len(big);
+
+	if (borrow) {
+		/* num is greater than big */
+		set_flag_nullsafe(status, STATUS_ERROR_BAD_INPUT);
+	}
 }
 
 void bigint_decrement(bigint_t *big)
@@ -990,7 +1041,7 @@ void bigint_div(bigint_t *big, const bigint_t *div, bigint_t *res)
 						bigint_set_lsbit(res);
 		    
 					if (bigint_compare(res, div) >= 0) {
-						bigint_subtract(res, div);
+						bigint_subtract(res, div, NULL);
 						big->bits[lmword] |= mask; 
 					} else {
 						big->bits[lmword] &= ~mask; 
@@ -1006,7 +1057,7 @@ void bigint_div(bigint_t *big, const bigint_t *div, bigint_t *res)
 								bigint_set_lsbit(res);
 		    
 							if (bigint_compare(res, div) >= 0) {
-								bigint_subtract(res, div);
+								bigint_subtract(res, div, NULL);
 								big->bits[w] |= mask; 
 							} else {
 								big->bits[w] &= ~mask; 
@@ -1133,7 +1184,7 @@ void bigint_div_fast(bigint_t *big, const bigint_t *div, bigint_t *res,
 	bigint_set_u32(aux1, 0);
 	uint32_t n = bigint_get_2k_geq(div);
 	bigint_add_2k(aux1, n);
-	bigint_subtract(aux1, div);
+	bigint_subtract(aux1, div, NULL);
 
 	while (bigint_compare_2k(res, n) > 0 &&
 	       bigint_compare(res, div) > 0) {
@@ -1149,7 +1200,7 @@ void bigint_div_fast(bigint_t *big, const bigint_t *div, bigint_t *res,
 
 	if (bigint_compare(res, div) >= 0) {
 		bigint_add_u32(big, 1);
-		bigint_subtract(res, div);
+		bigint_subtract(res, div, NULL);
 	}
 }
 
@@ -1195,7 +1246,7 @@ void bigint_mod(bigint_t *big, const bigint_t *div,
 	uint32_t n = bigint_get_2k_geq(div);
 	bigint_set_u32(aux1, 0);
 	bigint_add_2k(aux1, n);
-	bigint_subtract(aux1, div);
+	bigint_subtract(aux1, div, NULL);
 
 	while (bigint_compare_2k(big, n) > 0 &&
 	       bigint_compare(big, div) > 0) {
@@ -1209,7 +1260,7 @@ void bigint_mod(bigint_t *big, const bigint_t *div,
 	}
 
 	if (bigint_compare(big, div) >= 0) {
-		bigint_subtract(big, div);
+		bigint_subtract(big, div, NULL);
 	}
 }
 
@@ -1433,7 +1484,7 @@ static void sqrt_ubig(bigint_t *big, bigint_t *res)
 	while (1) {
 		bigint_add_2k(big, bit);
 		if (bigint_compare(res, big) >= 0) {
-			bigint_subtract(res, big);
+			bigint_subtract(res, big, NULL);
 			bigint_add_2k(big, bit);
 		} else {
 			bigint_subtract_2k(big, bit);

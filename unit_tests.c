@@ -141,7 +141,7 @@ int test_div(int action, void **resources)
 		bigint_add_2k(tri[0], bk);
 		bigint_set_u32(tri[1], 0);
 		bigint_add_2k(tri[1], k);
-		bigint_subtract_u32(tri[1], 1);
+		bigint_subtract_u32(tri[1], 1, NULL);
 		bigint_div(tri[0], tri[1], tri[2]);
 		return 0;
 	case FREE:
@@ -203,7 +203,7 @@ int test_div_fast(int action, void **resources)
 		bigint_add_2k(res[0], bk);
 		bigint_set_u32(res[1], 0);
 		bigint_add_2k(res[1], k);
-		bigint_subtract_u32(res[1], 1);
+		bigint_subtract_u32(res[1], 1, NULL);
 		bigint_div_fast(res[0], res[1], res[2], res[3], res[4], res[5]);
 		return 0;
 	case FREE:
