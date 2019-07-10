@@ -1,10 +1,7 @@
 /*
  * ToDo:
- *  Refactor multiplication with 
- *     add_N_mul2k(bigint_t *big, const bigint_t *add, uint32_t k);
  *  Implement multiplication:
  *    > Word by word
- *    > mul_2k
  *    > mul_2kless1: mul_2k, subtract_N_divk
  *    > Generic mult: Depending on density of ones:
  *          > 90% mul_2kless1, subtract_N_divk
@@ -55,7 +52,7 @@ static void bigint_update_len(bigint_t *big);
 static uint32_t bigint_get_right_most_on_bit(const bigint_t *big);
 static int has_off_bits(const bigint_t *big);
 static uint32_t index_of_msbit_in_word(uint32_t word);
-static void bigint_add_from_word(bigint_t *big, const bigint_t *add, uint32_t w);
+static void add_from_word(bigint_t *big, const bigint_t *add, uint32_t w);
 static void add_N_mul2k(bigint_t *big, const bigint_t *add, uint32_t k);
 static void add_N_div2k(bigint_t *big, const bigint_t *add, uint32_t k);
 static void set_div2k_plus_res2k(bigint_t *big, uint32_t k);
@@ -65,6 +62,7 @@ static void bigint_shift_right_bits(bigint_t *big, uint32_t n);
 static void bigint_shift_right_words(bigint_t *big, uint32_t n);
 static char char_dec2hex(int n);
 static void reverse_string(char *str, int len);
+static void pow_iterative(bigint_t *big, uint32_t p, bigint_t *aux);
 static uint32_t sqrt_u32(uint32_t n, uint32_t *res);
 static uint64_t sqrt_u64(uint64_t n, uint64_t *res);
 static uint32_t get_2k_4div_leq(const bigint_t *big);
@@ -628,7 +626,7 @@ void bigint_add_2k(bigint_t *big, uint32_t bit)
 	big->len = len;
 }
 
-static void bigint_add_from_word(bigint_t *big, const bigint_t *add, uint32_t w)
+static void add_from_word(bigint_t *big, const bigint_t *add, uint32_t w)
 {
 	uint32_t len = MAX(big->len, add->len);
 	if (len > big->words)
@@ -657,7 +655,7 @@ static void bigint_add_from_word(bigint_t *big, const bigint_t *add, uint32_t w)
 
 void bigint_add(bigint_t *big, const bigint_t *add)
 {
-	bigint_add_from_word(big, add, 0);
+	add_from_word(big, add, 0);
 }
 
 void bigint_increment(bigint_t *big)
@@ -1112,11 +1110,13 @@ static void add_N_mul2k(bigint_t *big, const bigint_t *add, uint32_t k)
 	uint64_t sum = 0;
 	for (i = 0; i < len; i++) {
 		uint32_t j = i + iword;
-		if (i < add->len) {
-			uint32_t adding = (add->bits[i] << ibit);
-			if (i && ibit) {
+		if (i <= add->len) {
+			uint32_t adding = 0;
+			if (i < add->len)
+				adding |= (add->bits[i] << ibit);
+			if (i && ibit)
 				adding |= (add->bits[i - 1] >> cbit);
-			}
+			
 			sum += (uint64_t) big->bits[j] + adding;
 		} else {
 			if (!sum)
@@ -1422,45 +1422,63 @@ void bigint_get_decimal_string(const bigint_t *big, char* str)
 
 void bigint_pow2(bigint_t *big, bigint_t *aux)
 {
+	pow_iterative(big, 2, aux);
+}
+
+static void pow_iterative(bigint_t *big, uint32_t p, bigint_t *aux)
+/* This function assumes p > 0 */
+{	
+	if (bigint_is_zero(big))
+		return;
+	
 	bigint_copy(aux, big);
 	uint32_t rmbit = bigint_get_right_most_on_bit(aux);
-	bigint_shift_left(big, rmbit);
-
 	uint32_t rmword = rmbit >> BXW_2K;
-	    
-	for (uint32_t b = (rmbit & BXW_MOD_MASK) + 1; b < BITSXWORD; b++) {
-		if (aux->bits[rmword] & (1 << b)) {
-			uint32_t i = (rmword << BXW_2K) + b;
-			bigint_shift_left(aux, i);
-			bigint_add_from_word(big, aux, rmword);
-			bigint_shift_right(aux, i);
+
+	p --;
+	while (p) {
+		bigint_shift_left(big, rmbit);
+		for (uint32_t b = (rmbit & BXW_MOD_MASK) + 1; b < BITSXWORD; b++) {
+			if (aux->bits[rmword] & (1 << b)) {
+				uint32_t i = (rmword << BXW_2K) + b;
+				add_N_mul2k(big, aux, i);
+			}
 		}
-	}
-	for (uint32_t w = rmword + 1; w < aux->len; w++) {
-		if (aux->bits[w]) {
-			for (uint32_t b = 0; b < BITSXWORD; b++) {
-				if (aux->bits[w] & (1 << b)) {
-					uint32_t i = (w << BXW_2K) + b;
-					bigint_shift_left(aux, i);
-					bigint_add_from_word(big, aux, w);
-					bigint_shift_right(aux, i);
+		for (uint32_t w = rmword + 1; w < aux->len; w++) {
+			if (aux->bits[w]) {
+				for (uint32_t b = 0; b < BITSXWORD; b++) {
+					if (aux->bits[w] & (1 << b)) {
+						uint32_t i = (w << BXW_2K) + b;
+						add_N_mul2k(big, aux, i);
+					}
 				}
 			}
 		}
+		p --;
 	}
 }
 
 void bigint_pow(bigint_t *big, uint32_t p, bigint_t *aux)
 {
-	if (p == 0) {
+	switch (p) {
+	case 0:
 		bigint_set_u32(big, 1);
-	} else if (p == 2) {
+		return;
+	case 1:
+		return;
+	case 2:
 		bigint_pow2(big, aux);
-	} else if (p > 2) {
-		bigint_t *q = bigint_clone(big);
-		for (int i = 1; i < p; i++)
-			bigint_mul(big, q, aux);
-		bigint_destroy(q);
+		return;
+	case 3:
+		pow_iterative(big, 3, aux);
+		return;
+	case 4:
+		bigint_pow2(big, aux);
+		bigint_pow2(big, aux);
+		return;
+	default:
+		pow_iterative(big, p, aux);
+		return;
 	}
 }
 
