@@ -1,12 +1,6 @@
 /*
  * ToDo:
- *  Implement multiplication:
- *    > Word by word
- *    > mul_2kless1: mul_2k, subtract_N_divk
- *    > Generic mult: Depending on density of ones:
- *          > 90% mul_2kless1, subtract_N_divk
- *          < 10% mul_2k, add_N_mulk
- *          ~ 50% word by word
+ *  Parallelize power with omp
  * > bigint_get_binary_string ->  bigint_encode_base2(big, charset, str)
  * > bigint_get_decimal_string ->  bigint_encode_base10
  * > bigint_get_hexadec_string ->  bigint_encode_base16
@@ -60,9 +54,18 @@ static void bigint_shift_left_bits(bigint_t *big, uint32_t n);
 static void bigint_shift_left_words(bigint_t *big, uint32_t n);
 static void bigint_shift_right_bits(bigint_t *big, uint32_t n);
 static void bigint_shift_right_words(bigint_t *big, uint32_t n);
+static void mul_as_sum_of_2k(bigint_t *result, const bigint_t *big_fixed,
+			     const bigint_t *x, uint32_t rmbit);
+static void mul_as_sum_of_2k_fast(bigint_t *result, const bigint_t *big,
+				  const bigint_t *x, uint32_t rmbit,
+				  bigint_t *aux);
+static void add_2qless1_mul2k(bigint_t *result, const bigint_t *big,
+			      uint32_t q, uint32_t k, bigint_t *aux);
 static char char_dec2hex(int n);
 static void reverse_string(char *str, int len);
 static void pow_iterative(bigint_t *big, uint32_t p, bigint_t *aux);
+static void pow_iterative_fast(bigint_t *big, uint32_t p,
+			       bigint_t *aux1, bigint_t *aux2);
 static uint32_t sqrt_u32(uint32_t n, uint32_t *res);
 static uint64_t sqrt_u64(uint64_t n, uint64_t *res);
 static uint32_t get_2k_4div_leq(const bigint_t *big);
@@ -231,7 +234,7 @@ static int digit_decimal(char c)
 	if (c > 47 && c < 58)
 		return c - 48;
 	else
-		return 0; // Report this error
+		return 0; /* Report this error */
 }
 
 void bigint_copy(bigint_t *big, const bigint_t *src)
@@ -240,8 +243,10 @@ void bigint_copy(bigint_t *big, const bigint_t *src)
 		free(big->bits);
 		big->words = src->words;
 		big->bits = malloc(big->words * sizeof(uint32_t));
+                /* Next line can be removed? */
 		memset(big->bits, 0, big->words * sizeof(uint32_t));
 	} else {
+                /* Next line can be removed? */
 		memset(big->bits, 0, big->len * sizeof(uint32_t));
 	}
 	if (src->len)
@@ -904,24 +909,109 @@ void bigint_mul(bigint_t *big, const bigint_t *x, bigint_t *aux)
 	bigint_copy(aux, big);
 	
 	uint32_t rmbit = bigint_get_right_most_on_bit(x);
-	bigint_shift_left(big, rmbit);
-	    
+	mul_as_sum_of_2k(big, aux, x, rmbit);
+}
+
+void bigint_mul_fast(bigint_t *big, const bigint_t *x, bigint_t *aux1,
+		     bigint_t *aux2)
+{
+	/* Return multiplication (big * x).
+	 * aux and aux 2 are auxiliary structure used in computation,
+	 * and should allocate
+	 * same size than "big".
+	 */
+	if (bigint_is_zero(big))
+		return;
+	
+	if (bigint_is_zero(x)) {
+		bigint_set_u32(big, 0);
+		return;
+	}
+	bigint_copy(aux1, big);
+	
+	uint32_t rmbit = bigint_get_right_most_on_bit(x);
+	mul_as_sum_of_2k_fast(big, aux1, x, rmbit, aux2);
+}
+
+static void mul_as_sum_of_2k(bigint_t *result, const bigint_t *big,
+			     const bigint_t *x, uint32_t rmbit)
+{
+	uint32_t w, b;
 	uint32_t rmword = rmbit >> BXW_2K;
 	    
-	for (uint32_t b = (rmbit & BXW_MOD_MASK) + 1; b < BITSXWORD; b++) {
+	bigint_shift_left(result, rmbit);
+	for (b = (rmbit & BXW_MOD_MASK) + 1; b < BITSXWORD; b++) {
 		if (x->bits[rmword] & (1 << b)) {
 			uint32_t i = (rmword << BXW_2K) + b;
-			add_N_mul2k(big, aux, i);
+			add_N_mul2k(result, big, i);
 		}
 	}
-	for (uint32_t w = rmword + 1; w < x->len; w++) {
+	for (w = rmword + 1; w < x->len; w++) {
 		if (x->bits[w]) {
-			for (uint32_t b = 0; b < BITSXWORD; b++) {
+			for (b = 0; b < BITSXWORD; b++) {
 				if (x->bits[w] & (1 << b)) {
 					uint32_t i = (w << BXW_2K) + b;
-					add_N_mul2k(big, aux, i);
+					add_N_mul2k(result, big, i);
 				}
 			}
+		}
+	}
+}
+
+static void mul_as_sum_of_2k_fast(bigint_t *result, const bigint_t *big,
+				  const bigint_t *x, uint32_t rmbit,
+				  bigint_t *aux)
+{
+	uint32_t w, b;
+	uint32_t rmword = rmbit >> BXW_2K;
+	uint32_t on = 0;
+	
+	bigint_shift_left(result, rmbit);
+	for (b = (rmbit & BXW_MOD_MASK) + 1; b < BITSXWORD; b++) {
+		if (x->bits[rmword] & (1 << b)) {
+			on ++;
+		} else if (on) {
+			uint32_t i = (rmword << BXW_2K) + b;
+			add_2qless1_mul2k(result, big,
+					  on, i, aux);
+			on = 0;
+		}
+	}
+	for (w = rmword + 1; w < x->len; w++) {
+		if (x->bits[w] == NMAX) {
+			on += BITSXWORD;
+		} else if (x->bits[w] > 0 || on) {
+			for (b = 0; b < BITSXWORD; b++) {
+				if (x->bits[w] & (1 << b)) {
+					on ++;
+				} else if (on) {
+					uint32_t i = (w << BXW_2K) + b;
+					add_2qless1_mul2k(result, big,
+							  on, i, aux);
+					on = 0;
+				}
+			}
+		}
+	}
+	if (on) {
+		uint32_t i = ((x->len) << BXW_2K);
+		add_2qless1_mul2k(result, big, on, i, aux);
+	}
+}
+
+static void add_2qless1_mul2k(bigint_t *result, const bigint_t *big,
+			      uint32_t q, uint32_t k, bigint_t *aux)
+{
+	/* Do the same word by word */
+	if (q > 6) {
+		bigint_copy(aux, big);
+		bigint_mul_2k(aux, q);
+		bigint_subtract(aux, big, NULL);
+		add_N_mul2k(result, aux, k - q);
+	} else {
+		while (q > 0) {
+			add_N_mul2k(result, big, k - q);
+			q --;
 		}
 	}
 }
@@ -934,8 +1024,8 @@ void bigint_div_u32(bigint_t *big, uint32_t div, uint32_t *res)
 		*res = 0;
 	} else {
 		*res = 0;
-		int lmword = big->len - 1;
-		for (int i = lmword; i >= 0; i--) {
+		int32_t lmword = big->len - 1;
+		for (int64_t i = lmword; i >= 0; i--) {
 			uint64_t aux = (uint64_t)(*res) << BITSXWORD;
 			*res = (aux + big->bits[i]) % div;
 			big->bits[i] = (aux + big->bits[i]) / div;
@@ -1412,11 +1502,6 @@ void bigint_get_decimal_string(const bigint_t *big, char* str)
 	}
 }
 
-void bigint_pow2(bigint_t *big, bigint_t *aux)
-{
-	pow_iterative(big, 2, aux);
-}
-
 static void pow_iterative(bigint_t *big, uint32_t p, bigint_t *aux)
 /* This function assumes p > 0 */
 {	
@@ -1427,26 +1512,24 @@ static void pow_iterative(bigint_t *big, uint32_t p, bigint_t *aux)
 	uint32_t rmbit = bigint_get_right_most_on_bit(aux);
 	uint32_t rmword = rmbit >> BXW_2K;
 
-	p --;
-	while (p) {
-		bigint_shift_left(big, rmbit);
-		for (uint32_t b = (rmbit & BXW_MOD_MASK) + 1; b < BITSXWORD; b++) {
-			if (aux->bits[rmword] & (1 << b)) {
-				uint32_t i = (rmword << BXW_2K) + b;
-				add_N_mul2k(big, aux, i);
-			}
-		}
-		for (uint32_t w = rmword + 1; w < aux->len; w++) {
-			if (aux->bits[w]) {
-				for (uint32_t b = 0; b < BITSXWORD; b++) {
-					if (aux->bits[w] & (1 << b)) {
-						uint32_t i = (w << BXW_2K) + b;
-						add_N_mul2k(big, aux, i);
-					}
-				}
-			}
-		}
-		p --;
+	while (--p) {
+		mul_as_sum_of_2k(big, aux, aux, rmbit);
+	}
+}
+
+static void pow_iterative_fast(bigint_t *big, uint32_t p,
+			       bigint_t *aux1, bigint_t *aux2)
+/* This function assumes p > 0 */
+{	
+	if (bigint_is_zero(big))
+		return;
+	
+	bigint_copy(aux1, big);
+	uint32_t rmbit = bigint_get_right_most_on_bit(aux1);
+	uint32_t rmword = rmbit >> BXW_2K;
+
+	while (--p) {
+		mul_as_sum_of_2k_fast(big, aux1, aux1, rmbit, aux2);
 	}
 }
 
@@ -1458,18 +1541,57 @@ void bigint_pow(bigint_t *big, uint32_t p, bigint_t *aux)
 		return;
 	case 1:
 		return;
-	case 2:
-		bigint_pow2(big, aux);
-		return;
-	case 3:
-		pow_iterative(big, 3, aux);
-		return;
 	case 4:
-		bigint_pow2(big, aux);
-		bigint_pow2(big, aux);
+		pow_iterative(big, 2, aux);
+		pow_iterative(big, 2, aux);
+		return;
+	case 6:
+		pow_iterative(big, 3, aux);
+		pow_iterative(big, 2, aux);
+		return;
+	case 8:
+		pow_iterative(big, 2, aux);
+		pow_iterative(big, 2, aux);
+		pow_iterative(big, 2, aux);
+		return;
+	case 9:
+		pow_iterative(big, 3, aux);
+		pow_iterative(big, 3, aux);
 		return;
 	default:
 		pow_iterative(big, p, aux);
+		return;
+	}
+}
+
+
+void bigint_pow_fast(bigint_t *big, uint32_t p, bigint_t *aux1, bigint_t *aux2)
+{
+	switch (p) {
+	case 0:
+		bigint_set_u32(big, 1);
+		return;
+	case 1:
+		return;
+	case 4:
+		pow_iterative_fast(big, 2, aux1, aux2);
+		pow_iterative_fast(big, 2, aux1, aux2);
+		return;
+	case 6:
+		pow_iterative_fast(big, 3, aux1, aux2);
+		pow_iterative_fast(big, 2, aux1, aux2);
+		return;
+	case 8:
+		pow_iterative_fast(big, 2, aux1, aux2);
+		pow_iterative_fast(big, 2, aux1, aux2);
+		pow_iterative_fast(big, 2, aux1, aux2);
+		return;
+	case 9:
+		pow_iterative_fast(big, 3, aux1, aux2);
+		pow_iterative_fast(big, 3, aux1, aux2);
+		return;
+	default:
+		pow_iterative_fast(big, p, aux1, aux2);
 		return;
 	}
 }

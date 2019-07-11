@@ -47,6 +47,8 @@ void bigint_mul_u32(bigint_t *big, uint32_t x);
 void bigint_mul_u64(bigint_t *big, uint64_t x);
 void bigint_mul_2k(bigint_t *big, uint32_t bit);
 void bigint_mul(bigint_t *big, const bigint_t *x, bigint_t *aux);
+void bigint_mul_fast(bigint_t *big, const bigint_t *x,
+		     bigint_t *aux1, bigint_t *aux2);
 void bigint_div_u32(bigint_t *big, uint32_t div, uint32_t *res);
 void bigint_div_u64(bigint_t *big, uint64_t div, uint64_t *res);
 void bigint_div_2k(bigint_t *big, uint32_t k);
@@ -61,8 +63,8 @@ void bigint_mod(bigint_t *big, const bigint_t *div,
 void bigint_get_binary_string(const bigint_t *big, char *str);
 void bigint_get_hexadec_string(const bigint_t *big, char *str);
 void bigint_get_decimal_string(const bigint_t *big, char* str);
-void bigint_pow2(bigint_t *big, bigint_t *aux);
 void bigint_pow(bigint_t *big, uint32_t p, bigint_t *aux);
+void bigint_pow_fast(bigint_t *big, uint32_t p, bigint_t *aux1, bigint_t *aux2);
 void bigint_sqrt(bigint_t *big, bigint_t *res);
   
 #endif
