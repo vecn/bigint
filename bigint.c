@@ -197,7 +197,7 @@ static int digit_hex2int(char c)
 		return 0; // Report this error
 }
 
-void bigint_set_decimal(bigint_t *big, const char *decimal)
+void bigint_set_decimal(bigint_t *big, const char *decimal, bigint_t *aux)
 {
 	int i = 0;
 	bigint_set_u32(big, 0);
@@ -211,7 +211,8 @@ void bigint_set_decimal(bigint_t *big, const char *decimal)
 		const char *c = decimal + i;
 		uint32_t pow10 = 1;
 		uint32_t d = dec_to_u32(c, len, &pow10);
-		bigint_mul_u32(big, pow10);
+		bigint_copy(aux, big);
+		bigint_mul_u32(aux, pow10, big);
 		bigint_add_u32(big, d);
 		i += len;
 	}
@@ -842,49 +843,39 @@ void bigint_shift_right(bigint_t *big, uint32_t n)
 	bigint_shift_right_bits(big, n & BXW_MOD_MASK);
 }
 
-void bigint_mul_u32(bigint_t *big, uint32_t x)
+void bigint_mul_u32(const bigint_t *big, uint32_t x, bigint_t *result)
 {
-	if (!bigint_is_zero(big)) {
-		if (!x) {
-			bigint_set_u32(big, 0);
-		} else {
-			bigint_t *init = bigint_clone(big);
-			if (!(x & 1))
-				bigint_set_u32(big, 0);
+	if (bigint_is_zero(big) || !x) {
+		bigint_set_u32(result, 0);
+		return;
+	}
+	if (x & 1)
+		bigint_copy(result, big);
+	else
+		bigint_set_u32(result, 0);
 	    
-			int shift_bits = 0;
-			for (uint32_t i = 1; i < BITSXWORD - 1; i++) {
-				if (x & (1 << i)) {
-					bigint_shift_left(init, i - shift_bits);
-					shift_bits = i;
-					bigint_add(big, init);
-				}
-			}
-			bigint_destroy(init);
-		}
+	int shift_bits = 0;
+	for (uint32_t i = 1; i < BITSXWORD; i++) {
+		if (x & (1U << i))
+			add_N_mul2k(result, big, i);
 	}
 }
 
-void bigint_mul_u64(bigint_t *big, uint64_t x)
+void bigint_mul_u64(const bigint_t *big, uint64_t x, bigint_t *result)
 {
-	if (!bigint_is_zero(big)) {
-		if (!x) {
-			bigint_set_u32(big, 0);
-		} else {
-			bigint_t *init = bigint_clone(big);
-			if (!(x & 1))
-				bigint_set_u32(big, 0);
+	if (bigint_is_zero(big) || !x) {
+		bigint_set_u32(result, 0);
+		return;
+	}
+	if (x & 1)
+		bigint_copy(result, big);
+	else
+		bigint_set_u32(result, 0);
 	    
-			int shift_bits = 0;
-			for (uint32_t i = 1; i < (2 << BXW_2K) - 1; i++) {
-				if (x & ((uint64_t)1 << i)) {
-					bigint_shift_left(init, i - shift_bits);
-					shift_bits = i;
-					bigint_add(big, init);
-				}
-			}
-			bigint_destroy(init);
-		}
+	int shift_bits = 0;
+	for (uint32_t i = 1; i < (2 << BXW_2K); i++) {
+		if (x & (1UL << i))
+			add_N_mul2k(result, big, i);
 	}
 }
 
