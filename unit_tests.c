@@ -15,7 +15,6 @@ enum {
 
 int test_mul_u32(int action, void **resources);
 int test_mul(int action, void **resources);
-int test_mul_fast(int action, void **resources);
 int test_div_u32(int action, void **resources);
 int test_div(int action, void **resources);
 int test_div_2kless1(int action, void **resources);
@@ -28,11 +27,10 @@ static void print_summary(int N, int failed);
 
 int main()
 {
-	int N = 7;
-	int (*tests[7])(int, void**) = {
+	int N = 6;
+	int (*tests[6])(int, void**) = {
 		test_mul_u32,
 		test_mul,
-		test_mul_fast,
 		test_div_u32,
 		test_div,
 		test_div_2kless1,
@@ -120,7 +118,7 @@ int test_mul_u32(int action, void **resources)
 		res = (bigint_t**) *resources;
 		bigint_set_u32(res[0], 2);
 		bigint_add_2k(res[0], bk);
-		bigint_mul_u32(res[0], 24 << k, res[1]);
+		bigint_mul_u32(res[0], 24U + (1U << k), res[1]);
 		return 0;
 	case FREE:
 		res = (bigint_t**) *resources;
@@ -132,7 +130,7 @@ int test_mul_u32(int action, void **resources)
 
 int test_mul(int action, void **resources)
 {
-	int k = 70;
+	int k = 60;
 	int bk = 128;
 	bigint_t **res;
 	
@@ -157,39 +155,6 @@ int test_mul(int action, void **resources)
 		bigint_destroy(res[0]);
 		bigint_destroy(res[1]);
 		bigint_destroy(res[2]);
-		return 0;
-	}
-}
-
-int test_mul_fast(int action, void **resources)
-{
-	int k = 70;
-	int bk = 128;
-	bigint_t **res;
-	
-	switch (action) {
-	case ALLOCATE:
-		res = malloc(4*sizeof(*res));
-		res[0] = bigint_create(100);
-		res[1] = bigint_create(100);
-		res[2] = bigint_create(100);
-		res[3] = bigint_create(100);
-		*resources = (void*) res;
-		return 0;
-	case EXECUTE:
-		res = (bigint_t**) *resources;
-		bigint_set_u32(res[0], 2);
-		bigint_add_2k(res[0], bk);
-		bigint_set_u32(res[1], 24);
-		bigint_add_2k(res[1], k);
-		bigint_mul_fast(res[0], res[1], res[2], res[3]);
-		return 0;
-	case FREE:
-		res = (bigint_t**) *resources;
-		bigint_destroy(res[0]);
-		bigint_destroy(res[1]);
-		bigint_destroy(res[2]);
-		bigint_destroy(res[3]);
 		return 0;
 	}
 }
